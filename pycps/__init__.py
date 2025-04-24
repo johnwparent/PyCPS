@@ -29,5 +29,3 @@ def dumps(cps: cps.Package) -> str:
 def dump(cps: cps.Package, file) -> None:
     with open(file, "w+") as f:
         f.write(dumps(cps))
-
-
