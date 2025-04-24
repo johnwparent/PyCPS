@@ -1,16 +1,72 @@
 
-import typing
-import pathlib
+import collections.abc
+import copy
+
+from typing import (
+    Dict
+)
+
 
 """Class representation of a CPS configuration"""
 
-class CPS:
-    """CPS representation"""
-    def __init__(self):
-        """"""
+class ParserMeta(type):
+    _dispatch = {}
+
+    def __init__(cls, name, bases, attr_dict):
+        for attr, parser in ParserMeta._dispatch.items():
+            setattr(cls, f"{attr}_parser", parser)
+        setattr(cls, "_default_parser", lambda x: x)
+        ParserMeta._dispatch = {}
+        super(ParserMeta, cls).__init__(name, bases, attr_dict)
+
+    def parse(component):
+        def wrapper(fun):
+            ParserMeta._dispatch[component] = fun
+            return fun
+        return wrapper
 
 
-class Package:
+class ParserMixin:
+    @classmethod
+    def from_dict(cls, cmp_dict: dict):
+        kwargs = {}
+        for attr in cmp_dict:
+            kwargs[attr] = getattr(cls, f"{attr}_parser", cls._default_parser)(cmp_dict[attr])
+        return cls(**kwargs)
+
+    def to_dict(self) -> Dict:
+        primitives = (bool, str, int, float, type(None))
+        def _serialize_sequence(sequence):
+            ret_seq = []
+            for entry in sequence:
+                if type(entry) in primitives:
+                    ret_seq.append(entry)
+                else:
+                    ret_seq.append(entry.to_dict())
+            return ret_seq
+
+        def parse_dict(attr_dict):
+            package_dict = dict()
+            for attr in attr_dict.keys():
+                val = attr_dict[attr]
+                if val:
+                    ret_val = copy.deepcopy(val)
+                    if getattr(val, "to_dict", None):
+                        ret_val = val.to_dict()
+                    elif isinstance(val, Dict):
+                        ret_val = parse_dict(val)
+                    elif isinstance(val, collections.abc.Sequence) and not isinstance(val, str):
+                        ret_val = _serialize_sequence(val)
+                    real_attr = attr.lstrip("_")
+                    package_dict[real_attr] = ret_val
+            return package_dict
+        package_dict = parse_dict(self.__dict__)
+        return package_dict
+
+
+parser = ParserMeta.parse
+
+class Package(ParserMixin, metaclass=ParserMeta):
     """CPS Package object
 
     The Package is the root of the CPS Specification
@@ -19,12 +75,46 @@ class Package:
     def __init__(
             self,
             *,
+            name=None,
+            platform=None,
+            prefix=None,
+            version=None,
+            version_scheme=None,
             compat_version=None,
             components=None,
             configuration=None,
-            cps_path=None
+            configurations=None,
+            cps_path=None,
+            description=None,
+            default_components=None,
+            display_name=None,
+            default_license=None,
+            license=None,
+            meta_comment=None,
+            meta_schema=None,
+            website=None,
+            requires=None
         ):
         """"""
+        self._name = name
+        self._platform = platform
+        self._prefix = prefix
+        self._version = version
+        self._version_scheme = version_scheme
+        self._compat_version = compat_version
+        self._components = components
+        self._configuration = configuration
+        self._configurations = configurations
+        self._cps_path = cps_path
+        self._description = description
+        self._default_components = default_components
+        self._display_name = display_name
+        self._default_license = default_license
+        self._license = license
+        self._meta_comment = meta_comment
+        self._meta_schema = meta_schema
+        self._website = website
+        self._requires = requires
 
     @property
     def name(self):
@@ -130,8 +220,37 @@ class Package:
     def requires(self, val):
         self._requires = val
 
+    @property
+    def description(self):
+        return self._description
 
-class Platform:
+    @description.setter
+    def description(self, val):
+        self._description = val
+
+    @staticmethod
+    @parser("components")
+    def _parse_components(cmps):
+        components = {}
+        for x in cmps:
+            components[x] = Component.from_dict(cmps[x])
+        return components
+
+    @staticmethod
+    @parser("requires")
+    def _parse_requirements(reqs):
+        requirements = {}
+        for x in reqs:
+            requirements[x] = Requirement.from_dict(reqs[x])
+        return requirements
+
+    @staticmethod
+    @parser("platform")
+    def _parser_platform(platform):
+        return Platform(**platform)
+
+
+class Platform(ParserMixin, metaclass=ParserMeta):
     """CPS Platform object"""
     def __init__(
             self,
@@ -142,8 +261,24 @@ class Platform:
             cpp_runtime_vendor=None,
             clr_vendor=None,
             clr_version=None,
+            isa=None,
+            kernel=None,
+            kernel_version=None,
+            jvm_vendor=None,
+            jvm_version=None,
         ):
         """"""
+        self._c_runtime_vendor = c_runtime_vendor
+        self._c_runtime_version = c_runtime_version
+        self._cpp_runtime_version = cpp_runtime_version
+        self._cpp_runtime_vendor = cpp_runtime_vendor
+        self._clr_vendor = clr_vendor
+        self._clr_version = clr_version
+        self._isa = isa
+        self._kernel = kernel
+        self._kernel_version = kernel_version
+        self._jvm_vendor = jvm_vendor
+        self._jvm_version = jvm_version
 
     @property
     def c_runtime_vendor(self):
@@ -234,11 +369,14 @@ class Platform:
         self._kernel_version = val
 
 
-
-class Requirement:
+class Requirement(ParserMixin, metaclass=ParserMeta):
     """CPS Requirement object"""
-    def __init__(self, *comps, components=None):
+    def __init__(self, *, components=None, hints=None, requires=None, version=None):
         """"""
+        self._components = components
+        self._hints = hints
+        self._requires = requires
+        self._version = version
 
     @property
     def components(self):
@@ -273,11 +411,43 @@ class Requirement:
         self._version = val
 
 
-
-class Component:
+class Component(ParserMixin, metaclass=ParserMeta):
     """CPS Component object"""
-    def __init__(self):
+    def __init__(self, *,
+                 type=None,
+                 configurations=None,
+                 compile_features=None,
+                 compile_flags=None,
+                 definitions=None,
+                 includes=None,
+                 link_features=None,
+                 link_flags=None,
+                 link_libraries=None,
+                 link_languages=None,
+                 link_location=None,
+                 link_requires=None,
+                 location=None,
+                 requires=None,
+                 description=None,
+                 license=None
+                 ):
         """"""
+        self._configurations = configurations
+        self._type = type
+        self._compile_features = compile_features
+        self._compile_flags = compile_flags
+        self._definitions = definitions
+        self._includes = includes
+        self._link_features = link_features
+        self._link_flags = link_flags
+        self._link_languages = link_languages
+        self._link_libraries = link_libraries
+        self._link_location = link_location
+        self._link_requires = link_requires
+        self._location = location
+        self._requires = requires
+        self._license = license
+        self._description = description
 
     @property
     def type(self):
@@ -383,11 +553,60 @@ class Component:
     def requires(self, val):
         self._requires = val
 
+    @property
+    def description(self):
+        return self._description
 
-class Configuration:
+    @description.setter
+    def description(self, val):
+        self._description = val
+
+    @property
+    def configurations(self):
+        return self._configurations
+
+    @configurations.setter
+    def configurations(self, val):
+        self._configurations = val
+
+    @staticmethod
+    @parser("configurations")
+    def _parse_configurations(configs):
+        component_configs = {}
+        for x in configs:
+            component_configs[x] = Configuration.from_dict(configs[x])
+        return component_configs
+
+
+class Configuration(ParserMixin, metaclass=ParserMeta):
     """CPS Configuration object"""
-    def __init__(self):
+    def __init__(self, *,
+                compile_features=None,
+                compile_flags=None,
+                definitions=None,
+                includes=None,
+                link_features=None,
+                link_flags=None,
+                link_languages=None,
+                link_libraries=None,
+                link_location=None,
+                link_requires=None,
+                location=None,
+                requires=None,
+        ):
         """"""
+        self._compile_features = compile_features
+        self._compile_flags = compile_flags
+        self._definitions = definitions
+        self._includes = includes
+        self._link_features = link_features
+        self._link_flags = link_flags
+        self._link_languages = link_languages
+        self._link_libraries = link_libraries
+        self._link_location = link_location
+        self._link_requires = link_requires
+        self._location = location
+        self._requires = requires
 
     @property
     def compile_features(self):
